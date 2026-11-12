@@ -32,7 +32,11 @@ jobs:
         run: |
           mkdir -p render output
           blender -b -P scripts/create_scene.py
-
+      - name: Check rendered frames
+        working-directory: jet_engine_video_generator
+        run: |
+          echo "Searching for rendered images..."
+          find . -type f -name "*.png" | head -30
       - name: Generate music and sound effects
         working-directory: jet_engine_video_generator
         run: |
