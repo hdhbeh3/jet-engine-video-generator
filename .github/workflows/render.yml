@@ -1,100 +1,87 @@
-
 name: Render Jet Engine Blender Video
 
 on:
-  workflow_dispatch:
+workflow_dispatch:
 
 jobs:
-  render:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
+render:
+runs-on: ubuntu-latest
+timeout-minutes: 360
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Install Blender and FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y blender ffmpeg python3-numpy unzip
+  - name: Install Blender and dependencies
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y blender ffmpeg python3-numpy unzip libegl1 libgl1 libxkbcommon0 libxrender1 libxi6 libxfixes3 libsm6
 
-      - name: Extract project ZIP
-        run: |
-          unzip -oq jet_engine_video_generator_v0_1.zip
+  - name: Extract project ZIP
+    run: |
+      unzip -oq jet_engine_video_generator_v0_1.zip
 
-          SCRIPT=$(find . -type f -path '*/scripts/create_scene.py' -print -quit)
+      SCRIPT=$(find . -type f -path '*/scripts/create_scene.py' -print -quit)
 
-          if [ -z "$SCRIPT" ]; then
-            echo "ERROR: create_scene.py not found"
-            exit 1
-          fi
+      if [ -z "$SCRIPT" ]; then
+        echo "ERROR: create_scene.py not found"
+        exit 1
+      fi
 
-          PROJECT_DIR=$(dirname "$(dirname "$SCRIPT")")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      PROJECT_DIR=$(dirname "$(dirname "$SCRIPT")")
+      echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      echo "Project folder: $PROJECT_DIR"
 
-          echo "Project folder: $PROJECT_DIR"
-          ls -la "$PROJECT_DIR"
+  - name: Check voiceover
+    run: |
+      test -f assets/voiceover.m4a
+      echo "Voiceover found"
 
-      - name: Check voiceover
-        run: |
-          test -f assets/voiceover.m4a
-          echo "Voiceover found"
+  - name: Render 3D animation
+    run: |
+      cd "$PROJECT_DIR"
+      mkdir -p render output
+      blender -b -noaudio -P scripts/create_scene.py
 
-      - name: Render 3D animation
-        run: |
-          cd "$PROJECT_DIR"
+  - name: Check rendered frames
+    run: |
+      cd "$PROJECT_DIR"
+      COUNT=$(find render -maxdepth 1 -name 'frame_*.png' | wc -l)
+      echo "Rendered frames: $COUNT"
+      if [ "$COUNT" -eq 0 ]; then
+        echo "ERROR: Blender produced no frames"
+        exit 1
+      fi
 
-          mkdir -p render output
+  - name: Generate music and sound effects
+    run: |
+      cd "$PROJECT_DIR"
+      python3 scripts/make_audio.py
 
-          sed -i 's/BLENDER_EEVEE_NEXT/BLENDER_EEVEE/g' scripts/create_scene.py
+  - name: Combine video and audio
+    run: |
+      cd "$PROJECT_DIR"
 
-          blender -b -P scripts/create_scene.py
+      ffmpeg -y \
+        -framerate 30 \
+        -i render/frame_%04d.png \
+        -i "$GITHUB_WORKSPACE/assets/voiceover.m4a" \
+        -i render/music_sfx.wav \
+        -filter_complex "[1:a]aresample=48000[voice];[2:a]volume=0.38[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[a]" \
+        -map 0:v \
+        -map "[a]" \
+        -c:v libx264 \
+        -preset veryfast \
+        -crf 19 \
+        -pix_fmt yuv420p \
+        -r 30 \
+        -c:a aac \
+        -shortest \
+        output/jet-engine-short.mp4
 
-      - name: Check rendered frames
-        run: |
-          cd "$PROJECT_DIR"
-
-          echo "Searching for rendered images..."
-          find . -type f -name "*.png" | head -30
-
-          echo "Render folder:"
-          ls -lah render/
-
-      - name: Generate music and sound effects
-        run: |
-          cd "$PROJECT_DIR"
-          python3 scripts/make_audio.py
-
-      - name: Check generated audio
-        run: |
-          cd "$PROJECT_DIR"
-          ls -lah render/
-
-      - name: Combine video and audio
-        run: |
-          cd "$PROJECT_DIR"
-
-          ffmpeg -y \
-            -framerate 30 \
-            -i render/frame_%04d.png \
-            -i "$GITHUB_WORKSPACE/assets/voiceover.m4a" \
-            -i render/music_sfx.wav \
-            -filter_complex "[1:a]aresample=48000[voice];[2:a]volume=0.38[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[a]" \
-            -map 0:v \
-            -map "[a]" \
-            -c:v libx264 \
-            -preset veryfast \
-            -crf 19 \
-            -pix_fmt yuv420p \
-            -r 30 \
-            -c:a aac \
-            -shortest \
-            output/jet-engine-short.mp4
-
-      - name: Upload final video
-        uses: actions/upload-artifact@v4
-        with:
-          name: jet-engine-short
-          path: "**/output/jet-engine-short.mp4"
-          if-no-files-found: error
-          
+  - name: Upload final video
+    uses: actions/upload-artifact@v4
+    with:
+      name: jet-engine-short
+      path: "**/output/jet-engine-short.mp4"
+      if-no-files-found: error
