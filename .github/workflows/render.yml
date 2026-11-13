@@ -1,7 +1,10 @@
-name: Render Jet Engine Blender Video
+name: Render Jet Engine Remotion Video
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   render:
@@ -12,76 +15,70 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Blender and dependencies
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y blender ffmpeg python3-numpy unzip libegl1 libgl1 libxkbcommon0 libxrender1 libxi6 libxfixes3 libsm6
+          sudo apt-get install -y ffmpeg
 
       - name: Extract project ZIP
         run: |
-          unzip -oq jet_engine_video_generator_v0_1.zip
+          mkdir -p project
+          unzip -oq "jet-engine-remotion (1).zip" -d project
 
-          SCRIPT=$(find . -type f -path '*/scripts/create_scene.py' -print -quit)
+          PROJECT_DIR="$(dirname "$(find project -name package.json -print -quit)")"
 
-          if [ -z "$SCRIPT" ]; then
-            echo "ERROR: create_scene.py not found"
+          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/src/index.ts" ]; then
+            echo "ERROR: Remotion project structure not found"
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$(dirname "$SCRIPT")")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project folder: $PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
 
-      - name: Check voiceover
+      - name: Install project dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+
+      - name: Prepare voiceover and generate audio
         run: |
           test -f assets/voiceover.m4a
-          echo "Voiceover found"
 
-      - name: Render 3D animation
-        run: |
+          cp assets/voiceover.m4a "$PROJECT_DIR/src/voiceover.m4a"
+
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy
+
           cd "$PROJECT_DIR"
-          mkdir -p render output
-          blender -b -noaudio -P scripts/create_scene.py
+          python3 src/build_audio.py
 
-      - name: Check rendered frames
-        run: |
-          cd "$PROJECT_DIR"
-          COUNT=$(find render -maxdepth 1 -name 'frame_*.png' | wc -l)
-          echo "Rendered frames: $COUNT"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "ERROR: Blender produced no frames"
-            exit 1
-          fi
+          test -f public/audio/final-mix.m4a
 
-      - name: Generate music and sound effects
+      - name: Render 3D video
         run: |
-          cd "$PROJECT_DIR"
-          python3 scripts/make_audio.py
-
-      - name: Combine video and audio
-        run: |
+          mkdir -p output
           cd "$PROJECT_DIR"
 
-          ffmpeg -y \
-            -framerate 30 \
-            -i render/frame_%04d.png \
-            -i "$GITHUB_WORKSPACE/assets/voiceover.m4a" \
-            -i render/music_sfx.wav \
-            -filter_complex "[1:a]aresample=48000[voice];[2:a]volume=0.38[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[a]" \
-            -map 0:v \
-            -map "[a]" \
-            -c:v libx264 \
-            -preset veryfast \
-            -crf 19 \
-            -pix_fmt yuv420p \
-            -r 30 \
-            -c:a aac \
-            -shortest \
-            output/jet-engine-short.mp4
+          npx remotion render \
+            src/index.ts \
+            JetEngine \
+            "$GITHUB_WORKSPACE/output/jet-engine.mp4" \
+            --codec h264
 
       - name: Upload final video
         uses: actions/upload-artifact@v4
         with:
-          name: jet-engine-short
-          path: "**/output/jet-engine-short.mp4"
+          name: jet-engine-final-video
+          path: output/jet-engine.mp4
           if-no-files-found: error
+          
