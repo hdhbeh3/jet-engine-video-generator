@@ -35,15 +35,20 @@ jobs:
           mkdir -p project
           unzip -oq "jet-engine-remotion (1).zip" -d project
 
-          PROJECT_DIR="$(dirname "$(find project -name package.json -print -quit)")"
+          PACKAGE_FILE="$(find project -name package.json -print -quit)"
 
-          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/src/index.ts" ]; then
-            echo "ERROR: Remotion project structure not found"
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json not found"
             exit 1
           fi
 
+          PROJECT_DIR="$(dirname "$PACKAGE_FILE")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Project found: $PROJECT_DIR"
+
+          echo "Project files:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f
 
       - name: Install project dependencies
         run: |
@@ -54,19 +59,45 @@ jobs:
         run: |
           test -f assets/voiceover.m4a
 
-          cp assets/voiceover.m4a "$PROJECT_DIR/src/voiceover.m4a"
+          AUDIO_SCRIPT="$(find "$PROJECT_DIR" -name build_audio.py -print -quit)"
+
+          if [ -z "$AUDIO_SCRIPT" ]; then
+            echo "ERROR: build_audio.py not found"
+            exit 1
+          fi
+
+          SCRIPT_DIR="$(dirname "$AUDIO_SCRIPT")"
+
+          echo "Audio script: $AUDIO_SCRIPT"
+
+          cp assets/voiceover.m4a "$SCRIPT_DIR/voiceover.m4a"
 
           python -m pip install --upgrade pip
           python -m pip install numpy scipy
 
-          cd "$PROJECT_DIR"
-          python3 src/build_audio.py
+          python3 "$AUDIO_SCRIPT"
 
-          test -f public/audio/final-mix.m4a
+          mkdir -p "$PROJECT_DIR/public/audio"
+
+          MIX_PATH="$SCRIPT_DIR/../public/audio/final-mix.m4a"
+          DEST="$PROJECT_DIR/public/audio/final-mix.m4a"
+
+          if [ ! -f "$MIX_PATH" ]; then
+            echo "ERROR: Generated audio file not found"
+            find "$PROJECT_DIR" -name "final-mix.m4a"
+            exit 1
+          fi
+
+          if [ "$(realpath -m "$MIX_PATH")" != "$(realpath -m "$DEST")" ]; then
+            cp "$MIX_PATH" "$DEST"
+          fi
+
+          test -f "$DEST"
+          echo "Final audio ready"
 
       - name: Render 3D video
         run: |
-          mkdir -p output
+          mkdir -p "$GITHUB_WORKSPACE/output"
           cd "$PROJECT_DIR"
 
           npx remotion render \
